@@ -1,0 +1,30 @@
+data:
+  raw_dir: data/raw/ml-1m
+  min_rating: 4
+  train_negatives: 2
+  eval_negatives: 99
+  seed: 42
+
+model:
+  embedding_dim: 16
+  hidden_dims: [128, 64]
+  dropout: 0.2
+
+training:
+  batch_size: 4096
+  learning_rate: 0.001
+  epochs: 15
+  patience: 3
+  weight_decay: 0.00001
+  seed: 42
+
+evaluation:
+  k_values: [10, 20]
+
+paths:
+  processed_dir: data/processed
+  models_dir: models
+  rebuild_dir: models/rebuilds
+  reports_dir: reports
+  figures_dir: reports/figures
+  bundle_dir: models/bundle
