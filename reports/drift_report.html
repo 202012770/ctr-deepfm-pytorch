@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Recommendation Drift Report</title>
+<style>
+body { font-family: -apple-system, Segoe UI, Arial, sans-serif; margin: 2rem; }
+table { border-collapse: collapse; max-width: 720px; width: 100%; }
+th, td { border-bottom: 1px solid #d8dee4; padding: 6px 10px; text-align: left; }
+th { background: #f6f8fa; }
+</style></head><body>
+<h1>Recommendation Drift Report</h1>
+<p>Status: <strong>drift</strong> · rows: 380 ·
+checked: 5 · max PSI: 0.9125</p>
+<table><thead><tr><th>Feature</th><th>Type</th><th>PSI</th><th>Flag</th></tr></thead>
+<tbody><tr><td>age</td><td>profile</td><td>0.9125</td><td>drift</td></tr><tr><td>occupation</td><td>profile</td><td>0.1070</td><td>moderate</td></tr><tr><td>score_top1</td><td>score</td><td>0.0989</td><td></td></tr><tr><td>zip_prefix</td><td>profile</td><td>0.0629</td><td></td></tr><tr><td>gender</td><td>profile</td><td>0.0111</td><td></td></tr></tbody></table>
+<p>PSI thresholds: &lt;0.1 stable, 0.1–0.25 moderate, &gt;0.25 drift.
+Generated at 2026-10-30T07:17:55.393528+00:00.</p>
+</body></html>

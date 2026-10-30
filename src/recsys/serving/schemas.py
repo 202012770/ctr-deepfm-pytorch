@@ -37,6 +37,8 @@ class RecommendResponse(BaseModel):
     cold_start: bool
     model_version: str
     items: list[RecommendedItem]
+    request_id: str = ""
+    cache_hit: bool = False
 
 
 class ScoreRequest(BaseModel):
@@ -51,6 +53,7 @@ class ScoreResponse(BaseModel):
     cold_start: bool
     model_version: str
     scores: list[float]
+    request_id: str = ""
 
 
 class HealthResponse(BaseModel):

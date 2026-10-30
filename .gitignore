@@ -17,3 +17,8 @@ models/rebuilds/
 # runtime
 *.log
 
+
+# runtime prediction log
+data/predictions.db
+data/predictions.db-shm
+data/predictions.db-wal

@@ -1,0 +1,36 @@
+{
+  "status": "stable",
+  "rows": 350,
+  "n_checked": 5,
+  "drifted_features": [],
+  "max_psi": 0.0738,
+  "features": {
+    "score_top1": {
+      "type": "score",
+      "psi": 0.0738,
+      "current_mean": 0.9855,
+      "reference_mean": 0.986975
+    },
+    "occupation": {
+      "type": "profile",
+      "psi": 0.0472
+    },
+    "zip_prefix": {
+      "type": "profile",
+      "psi": 0.0304
+    },
+    "age": {
+      "type": "profile",
+      "psi": 0.0164
+    },
+    "gender": {
+      "type": "profile",
+      "psi": 0.0034
+    }
+  },
+  "thresholds": {
+    "stable": 0.1,
+    "moderate": 0.25
+  },
+  "checked_at": "2026-10-30T07:17:35.319517+00:00"
+}

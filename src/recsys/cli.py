@@ -21,6 +21,29 @@ def cmd_prepare(args: argparse.Namespace) -> int:
     return 0
 
 
+def _build_reference(bundle, *, n_users: int = 300, seed: int = 42):
+    """Score a sample of users through the serving path and snapshot Top-1 scores."""
+    import numpy as np
+
+    from recsys.monitoring.drift import build_reference_stats
+    from recsys.serving.recommender import Recommender
+
+    recommender = Recommender(bundle)
+    rng = np.random.default_rng(seed)
+    user_ids = recommender.users["user_id"].to_numpy()
+    sample = rng.choice(user_ids, size=min(n_users, len(user_ids)), replace=False)
+    scores = []
+    for user_id in sample:
+        items, *_ = recommender.recommend(int(user_id), top_k=1)
+        scores.append(float(items[0]["score"]))
+    return build_reference_stats(
+        recommender.users,
+        np.asarray(scores, dtype="float64"),
+        recommender.model_name,
+        recommender.version,
+    ), recommender
+
+
 def cmd_train(args: argparse.Namespace) -> int:
     from recsys.pipeline import prepare_data, run_experiment, save_bundle
 
@@ -41,6 +64,11 @@ def cmd_train(args: argparse.Namespace) -> int:
         model_name=args.model,
         embedding_dim=args.dim or int(cfg.model.embedding_dim),
     )
+    reference, recommender = _build_reference(cfg.path("paths.bundle_dir"))
+    (cfg.path("paths.bundle_dir") / "reference_stats.json").write_text(
+        json.dumps(reference, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
+    logger.info("Reference stats built for %s", recommender.version)
     reports = cfg.path("paths.reports_dir")
     reports.mkdir(parents=True, exist_ok=True)
     (reports / "metrics.json").write_text(
@@ -89,6 +117,44 @@ def cmd_coldstart(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_reference(args: argparse.Namespace) -> int:
+    cfg = load_config()
+    bundle = cfg.path("paths.bundle_dir")
+    reference, recommender = _build_reference(bundle)
+    path = bundle / "reference_stats.json"
+    path.write_text(json.dumps(reference, indent=2, ensure_ascii=False), encoding="utf-8")
+    print(f"Saved reference stats to {path} (version={recommender.version})")
+    return 0
+
+
+def cmd_drift(args: argparse.Namespace) -> int:
+    from recsys.monitoring.drift import (
+        compute_drift,
+        load_reference_stats,
+        write_html_report,
+    )
+    from recsys.monitoring.prediction_log import PredictionLog
+
+    cfg = load_config()
+    bundle = cfg.path("paths.bundle_dir")
+    reference_path = bundle / "reference_stats.json"
+    if not reference_path.exists():
+        print(f"No reference stats at {reference_path}. Run `ctr train` first.")
+        return 1
+    frame = PredictionLog().recent(limit=args.limit)
+    if frame.empty:
+        print("No predictions logged yet. Call /recommend first.")
+        return 0
+    result = compute_drift(load_reference_stats(reference_path), frame)
+    reports = cfg.path("paths.reports_dir")
+    (reports / "drift_report.json").write_text(
+        json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
+    write_html_report(result, reports / "drift_report.html")
+    print(json.dumps({k: result[k] for k in ("status", "rows", "max_psi")}, indent=2))
+    return 1 if result["status"] == "drift" else 0
+
+
 def cmd_serve(args: argparse.Namespace) -> int:
     import uvicorn
 
@@ -129,6 +195,13 @@ def build_parser() -> argparse.ArgumentParser:
     coldstart = sub.add_parser("coldstart", help="hold out users and evaluate cold start")
     coldstart.add_argument("--epochs", type=int, default=10)
     coldstart.set_defaults(func=cmd_coldstart)
+
+    reference = sub.add_parser("reference", help="rebuild the drift reference from the bundle")
+    reference.set_defaults(func=cmd_reference)
+
+    drift = sub.add_parser("drift", help="compare logged requests with the training reference")
+    drift.add_argument("--limit", type=int, default=1000)
+    drift.set_defaults(func=cmd_drift)
 
     serve = sub.add_parser("serve", help="run the recommendation API")
     serve.add_argument("--host", default="0.0.0.0")

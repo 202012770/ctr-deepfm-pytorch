@@ -76,9 +76,7 @@ def build_arrays(
 def _bucket_counts(series: pd.Series) -> pd.Series:
     if series.empty:
         return series
-    buckets = pd.qcut(
-        series, q=min(10, series.nunique()), duplicates="drop", labels=False
-    )
+    buckets = pd.qcut(series, q=min(10, series.nunique()), duplicates="drop", labels=False)
     return "c" + buckets.astype("Int64").astype(str)
 
 
@@ -113,18 +111,12 @@ def enrich_user_movie_features(
         popularity=("rating", "size"), avg_rating=("rating", "mean")
     )
 
-    genre_rows = train_ratings.merge(
-        movies[["movie_id", "genres"]], on="movie_id", how="left"
+    genre_rows = train_ratings.merge(movies[["movie_id", "genres"]], on="movie_id", how="left")
+    genre_rows = genre_rows.assign(genre=genre_rows["genres"].str.split("|")).explode("genre")
+    genre_counts = genre_rows.groupby(["user_id", "genre"]).size().rename("n").reset_index()
+    genre_counts["share"] = genre_counts["n"] / genre_counts.groupby("user_id")["n"].transform(
+        "sum"
     )
-    genre_rows = genre_rows.assign(
-        genre=genre_rows["genres"].str.split("|")
-    ).explode("genre")
-    genre_counts = (
-        genre_rows.groupby(["user_id", "genre"]).size().rename("n").reset_index()
-    )
-    genre_counts["share"] = genre_counts["n"] / genre_counts.groupby("user_id")[
-        "n"
-    ].transform("sum")
     top_genre = (
         genre_counts.sort_values(["user_id", "share"], ascending=[True, False])
         .drop_duplicates("user_id")
@@ -136,12 +128,8 @@ def enrich_user_movie_features(
     users["user_activity"] = users["user_id"].map(_bucket_counts(user_stats["activity"]))
     users["user_avg_rating"] = users["user_id"].map(_bucket_rating(user_stats["avg_rating"]))
     users["user_top_genre"] = users["user_id"].map(top_genre)
-    movies["item_popularity"] = movies["movie_id"].map(
-        _bucket_counts(item_stats["popularity"])
-    )
-    movies["item_avg_rating"] = movies["movie_id"].map(
-        _bucket_rating(item_stats["avg_rating"])
-    )
+    movies["item_popularity"] = movies["movie_id"].map(_bucket_counts(item_stats["popularity"]))
+    movies["item_avg_rating"] = movies["movie_id"].map(_bucket_rating(item_stats["avg_rating"]))
     for column in ("user_activity", "user_avg_rating", "user_top_genre"):
         users[column] = users[column].fillna("unknown")
     for column in ("item_popularity", "item_avg_rating"):
@@ -311,6 +299,7 @@ def save_bundle(
     embedding_dim: int = 16,
     hidden_dims: list[int] | None = None,
     dropout: float = 0.2,
+    reference: dict[str, Any] | None = None,
 ) -> Path:
     cfg = cfg or load_config()
     bundle = cfg.path("paths.bundle_dir")
@@ -338,6 +327,10 @@ def save_bundle(
     (bundle / "metrics.json").write_text(
         json.dumps(metadata, indent=2, ensure_ascii=False), encoding="utf-8"
     )
+    if reference is not None:
+        (bundle / "reference_stats.json").write_text(
+            json.dumps(reference, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
     return bundle
 
 
@@ -372,9 +365,7 @@ def prepare_cold_start(
     ratings, users, movies = load_all(cfg.path("data.raw_dir"))
     rng = np.random.default_rng(seed)
     all_users = np.sort(users["user_id"].unique())
-    cold_users = rng.choice(
-        all_users, size=max(1, int(len(all_users) * fraction)), replace=False
-    )
+    cold_users = rng.choice(all_users, size=max(1, int(len(all_users) * fraction)), replace=False)
     cold_set = set(cold_users.tolist())
     warm_ratings = ratings[~ratings["user_id"].isin(cold_set)]
 
@@ -385,15 +376,12 @@ def prepare_cold_start(
         eval_negatives=int(cfg.data.eval_negatives),
         seed=int(cfg.data.seed),
     )
-    users_enriched, movies_enriched = enrich_user_movie_features(
-        warm_split, ratings, users, movies
-    )
+    users_enriched, movies_enriched = enrich_user_movie_features(warm_split, ratings, users, movies)
     encoder = FeatureEncoder().fit(users_enriched, movies_enriched)
     warm = build_arrays(warm_split, encoder, users_enriched, movies_enriched)
 
     positives = ratings[
-        ratings["user_id"].isin(cold_set)
-        & (ratings["rating"] >= int(cfg.data.min_rating))
+        ratings["user_id"].isin(cold_set) & (ratings["rating"] >= int(cfg.data.min_rating))
     ].sort_values(["user_id", "timestamp", "movie_id"])
     held_out = positives.groupby("user_id").tail(1)
     history = ratings.groupby("user_id")["movie_id"].apply(set).to_dict()
@@ -408,9 +396,7 @@ def prepare_cold_start(
             count=len(all_movies) - len(seen & set(all_movies)),
         )
         rows.append((int(row.user_id), int(row.movie_id), 1))
-        negatives = rng.choice(
-            pool, size=int(cfg.data.eval_negatives), replace=False
-        )
+        negatives = rng.choice(pool, size=int(cfg.data.eval_negatives), replace=False)
         rows.extend((int(row.user_id), int(movie), 0) for movie in negatives)
 
     cold_frame = pd.DataFrame(rows, columns=["user_id", "movie_id", "label"])
@@ -426,3 +412,14 @@ def prepare_cold_start(
         y_cold=cold_frame["label"].to_numpy(dtype="int8"),
         cold_users=cold_frame["user_id"].to_numpy(dtype="int32"),
     )
+
+
+def score_encoded(model: torch.nn.Module, X: np.ndarray, batch_size: int = 8192) -> np.ndarray:
+    """Score pre-encoded feature rows with a trained model."""
+    outputs: list[np.ndarray] = []
+    model.eval()
+    with torch.no_grad():
+        for start in range(0, len(X), batch_size):
+            batch = torch.from_numpy(X[start : start + batch_size].astype(np.int64))
+            outputs.append(torch.sigmoid(model(batch)).numpy())
+    return np.concatenate(outputs) if outputs else np.array([])

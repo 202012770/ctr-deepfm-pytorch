@@ -81,3 +81,23 @@ def test_enrich_features_adds_buckets(toy_tables) -> None:
     for column in ("item_popularity", "item_avg_rating"):
         assert column in movies_enriched.columns
         assert movies_enriched[column].notna().all()
+
+
+def test_load_all_parses_ml1m(tmp_path) -> None:
+    from recsys.data.loader import load_all
+
+    (tmp_path / "ratings.dat").write_text(
+        "1::1::5::1\n1::2::4::2\n2::2::5::3\n", encoding="latin-1"
+    )
+    (tmp_path / "users.dat").write_text(
+        "1::F::25::1::12345\n2::M::35::2::67890\n", encoding="latin-1"
+    )
+    (tmp_path / "movies.dat").write_text(
+        "1::Movie A (1995)::Drama\n2::Movie B (2001)::Comedy|Drama\n", encoding="latin-1"
+    )
+    ratings, users, movies = load_all(tmp_path)
+    assert len(ratings) == 3
+    assert users.loc[0, "zip_prefix"] == "123"
+    assert movies.loc[0, "year_bucket"] == "1990"
+    assert movies.loc[1, "genre_drama"] == 1
+    assert movies.loc[1, "genre_comedy"] == 1

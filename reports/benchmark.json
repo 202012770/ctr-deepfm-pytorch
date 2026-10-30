@@ -1,0 +1,21 @@
+{
+  "users": 200,
+  "top_k": 10,
+  "cold_cache": {
+    "mean_ms": 145.32,
+    "p50_ms": 121.18,
+    "p95_ms": 268.13,
+    "p99_ms": 508.06,
+    "max_ms": 1056.37
+  },
+  "warm_cache": {
+    "mean_ms": 0.8,
+    "p50_ms": 0.72,
+    "p95_ms": 1.36,
+    "p99_ms": 1.92,
+    "max_ms": 2.26
+  },
+  "cache_hits": 200,
+  "cache_misses": 200,
+  "speedup_p95": 197.2
+}

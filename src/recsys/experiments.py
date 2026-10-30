@@ -199,22 +199,24 @@ def bootstrap_ranking_ci(
         hr_samples[index] = hits[sample].mean()
         ndcg_samples[index] = gains[sample].mean()
     return {
-        f"hr@{k}_ci95": [float(np.quantile(hr_samples, 0.025)), float(np.quantile(hr_samples, 0.975))],
-        f"ndcg@{k}_ci95": [float(np.quantile(ndcg_samples, 0.025)), float(np.quantile(ndcg_samples, 0.975))],
+        f"hr@{k}_ci95": [
+            float(np.quantile(hr_samples, 0.025)),
+            float(np.quantile(hr_samples, 0.975)),
+        ],
+        f"ndcg@{k}_ci95": [
+            float(np.quantile(ndcg_samples, 0.025)),
+            float(np.quantile(ndcg_samples, 0.975)),
+        ],
     }
 
 
-def run_robustness(
-    seeds: tuple[int, ...] = (42, 2024, 7), epochs: int = 10
-) -> pd.DataFrame:
+def run_robustness(seeds: tuple[int, ...] = (42, 2024, 7), epochs: int = 10) -> pd.DataFrame:
     cfg = load_config()
     prepared = prepare_data(cfg)
     rows: list[dict[str, Any]] = []
     last_trainer = None
     for seed in seeds:
-        _, trainer, metrics = run_experiment(
-            "deepfm", prepared, cfg, epochs=epochs, seed=seed
-        )
+        _, trainer, metrics = run_experiment("deepfm", prepared, cfg, epochs=epochs, seed=seed)
         last_trainer = trainer
         metrics["seed"] = seed
         rows.append(metrics)
@@ -233,9 +235,7 @@ def run_robustness(
     }
     if last_trainer is not None:
         scores = last_trainer.predict_proba(prepared.X_test)
-        summary.update(
-            bootstrap_ranking_ci(prepared.test_users, prepared.y_test, scores)
-        )
+        summary.update(bootstrap_ranking_ci(prepared.test_users, prepared.y_test, scores))
 
     reports = cfg.path("paths.reports_dir")
     table.to_csv(reports / "robustness_runs.csv", index=False)

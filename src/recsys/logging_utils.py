@@ -7,6 +7,18 @@ import logging
 import sys
 from datetime import datetime, timezone
 
+EXTRA_FIELDS = (
+    "request_id",
+    "path",
+    "method",
+    "status_code",
+    "latency_ms",
+    "user_id",
+    "cold_start",
+    "cache",
+    "n_items",
+)
+
 
 class JsonFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
@@ -16,6 +28,9 @@ class JsonFormatter(logging.Formatter):
             "logger": record.name,
             "message": record.getMessage(),
         }
+        for field in EXTRA_FIELDS:
+            if hasattr(record, field):
+                payload[field] = getattr(record, field)
         if record.exc_info:
             payload["exception"] = self.formatException(record.exc_info)
         return json.dumps(payload, ensure_ascii=False)

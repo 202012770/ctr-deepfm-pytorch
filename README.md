@@ -26,6 +26,16 @@
 | HR@10 的 95% Bootstrap 置信区间 | **[0.6756, 0.6979]** |
 | 冷启动用户（10% 完全不可见） | AUC 0.8317，HR@10 0.4785 |
 
+**线上工程指标**（CPU，单进程）：
+
+| 指标 | 数值 |
+|---|---:|
+| 推荐 P95（冷缓存，全量 3883 部候选） | 268 ms |
+| 推荐 P95（命中用户缓存） | **1.36 ms** |
+| 缓存加速比（P95） | **197×** |
+| 可观测性 | 请求 ID + JSON 日志 + Prometheus `/metrics` |
+| 漂移监控 | 请求画像 + Top-1 分数 PSI（同分布 max PSI 0.074；注入漂移 0.91 告警） |
+
 **模型骨架对比**（未加统计特征，统一 15 轮预算，每个用户 1 正 + 99 负）：
 
 | 模型 | 参数量 | 训练时间 | 验证 AUC | 测试 AUC | HR@10 | NDCG@10 | HR@20 |
@@ -75,7 +85,7 @@ MovieLens-1M：6040 个用户、约 100 万条评分、3883 部电影。
 2. **留一法切分**：每个用户按时间排序，最后一条正样本作测试集，倒数第二条作验证集
 3. **训练负采样**：每条正样本配 2 个用户未评分的电影（可配置）
 4. **验证/测试**：每个用户 1 个正样本 + 99 个未评分电影，计算排序与 CTR 指标
-5. **特征**（25 个类别字段）：用户 ID、性别、年龄、职业、邮编前缀；电影 ID、年代；18 个类型标记
+5. **特征**（30 个类别字段）：用户 ID、性别、年龄、职业、邮编前缀，以及用户活跃度/均分/偏好类型；电影 ID、年代、物品热度/均分；18 个类型标记
 6. 未见过的类别 ID 映射到保留索引 0，支持冷启动
 
 这一协议避免了两个常见错误：随机切分导致未来信息泄漏，以及用已交互物品当负样本。
@@ -162,10 +172,11 @@ ctr-deepfm-pytorch/
 │   ├── data/                  # 解析 ml-1m、特征编码、留一法切分与负采样
 │   ├── models/                # Embedding/线性/FM/MLP 层与四个模型
 │   ├── train/                 # 训练循环、早停、AUC/HR/NDCG
-│   ├── serving/               # Recommender、Pydantic Schema、FastAPI
+│   ├── serving/               # Recommender、缓存、指标、FastAPI
+│   ├── monitoring/            # 预测日志、PSI 漂移
 │   ├── experiments.py         # 模型对比与消融
 │   └── cli.py                 # `ctr` 命令行
-├── tests/                     # 21 个单元/API 测试
+├── tests/                     # 27 个单元/API 测试
 ├── scripts/download_data.py   # 下载并解压 MovieLens
 ├── Dockerfile / Makefile / pyproject.toml
 ```
@@ -216,6 +227,9 @@ ctr ablation                # Embedding 维度与负采样比例消融
 ctr robustness              # 3 个随机种子 + Bootstrap 置信区间
 ctr negatives               # 均匀负采样 vs 热度负采样
 ctr coldstart               # 留出 10% 用户评估冷启动
+ctr reference               # 生成漂移参考分布
+ctr drift                   # 基于预测日志计算 PSI 漂移
+python scripts/benchmark.py # 冷/热缓存延迟基准
 ```
 
 ### 4. 启动推荐服务
@@ -254,11 +268,65 @@ curl -X POST http://127.0.0.1:8000/recommend \
 
 ---
 
+## 工程化：可观测性、监控与性能
+
+### 请求链路
+
+- 每个请求生成 `x-request-id`，同时写入响应头与结构化 JSON 日志
+- 日志字段：`request_id`、`user_id`、`cold_start`、`cache`、`n_items`、`latency_ms`
+- `/metrics` 暴露：请求数（按状态码）、请求延迟直方图、推荐条数、推荐分数分布、缓存命中/未命中、模型版本
+
+```text
+{"timestamp": "...", "logger": "recsys.access", "message": "recommend",
+ "request_id": "a1b2c3d4", "user_id": 1, "cold_start": false,
+ "cache": "miss", "n_items": 10, "latency_ms": 118.4}
+```
+
+### 预测日志与漂移
+
+- 每次 `/recommend` 写入 SQLite：用户画像、Top-K 结果、Top-1 分数、延迟、模型版本
+- `ctr reference` 通过**服务同一路径**抽样 300 个用户，保存 Top-1 分数与画像分布
+- `ctr drift` 对画像字段与 Top-1 分数计算 PSI（阈值 0.1 / 0.25）
+
+实测：
+
+| 场景 | 结果 |
+|---|---|
+| 同分布回放 350 条 | `stable`，max PSI **0.0738** |
+| 注入 30 条异常画像（age=99 / occupation=99 / zip=999） | `drift`，age PSI **0.9125** |
+
+报告：`reports/drift_report_stable.html`、`reports/drift_report_shifted.html`。
+
+两个真实踩坑，值得在面试里讲：
+
+1. **漂移口径必须和线上一致**：最初参考分布用的是测试候选集（含大量负样本）的分数，而线上记录的是全量物品 Top-K 分数，首日就误报 PSI=12。改成 Top-1 分数后恢复正常
+2. **高基数特征要降噪**：邮编有约 680 个取值，350 个请求下 PSI 被采样噪声推到 0.15；监控层折叠到首位数字后回到 0.06
+
+### 缓存与延迟
+
+- 用户级 LRU + TTL 缓存（默认 4096 用户 / 300 秒），key 包含模型版本和画像，模型更新后自动失效
+- 冷缓存：P50 **121 ms**、P95 **268 ms**（一次请求对 3883 部电影全量打分）
+- 热缓存：P50 **0.72 ms**、P95 **1.36 ms**，P95 加速 **197×**
+- 基准脚本：`python scripts/benchmark.py` → `reports/benchmark.json`
+
+### 环境变量
+
+| 变量 | 默认值 | 说明 |
+|---|---|---|
+| `CTR_BUNDLE_DIR` | `models/bundle` | 模型 bundle 路径 |
+| `CTR_PREDICTION_LOG` | `data/predictions.db` | 预测日志路径 |
+| `CTR_CACHE_SIZE` | `4096` | 用户缓存条目上限（0 关闭） |
+| `CTR_CACHE_TTL` | `300` | 缓存 TTL（秒） |
+| `CTR_NUM_THREADS` | CPU 核数一半 | PyTorch 线程数 |
+
+---
+
 ## 工程与测试
 
-- 21 个测试：数据切分、两种负采样、统计特征、FM 数学、Bootstrap 置信区间、模型前向、API
+- **27 个测试**，覆盖率 **67%**（含覆盖率门禁 60%）：数据切分、两种负采样、统计特征、FM 数学、Bootstrap 置信区间、预测日志、漂移、缓存、API
+- `ruff` + `mypy` 零错误；`pre-commit` 钩子防止格式回退
 - 随机种子同时控制参数初始化与样本打乱，已验证相同种子两次运行结果完全一致
-- `ruff` 静态检查，GitHub Actions 自动运行
+- CI 两阶段：`quality`（lint → mypy → 覆盖率测试）与 `docker-smoke`（构建镜像、起容器、调 `/health`、`/recommend`、`/metrics`）
 - Docker 多阶段构建（CPU 版 PyTorch），非 root + 健康检查
 
 ### Docker
@@ -289,8 +357,8 @@ docker build -t ctr-deepfm:latest . \
 
 1. 冷启动（完全不可见用户）的 HR@10 比热启动低 20.7 个点，仍需要独立的召回策略
 2. 未引入序列模型（DIN/DIEN）或图模型，推荐链路仍偏 CTR 静态特征
-3. 线上服务没有监控与漂移检测，可复用房价项目的 PSI 方案
-4. 只做了单次留一法协议，没有做多折交叉验证；好在这份数据上种子方差很小（AUC ±0.0005）
+3. 冷缓存单次请求需要全量打分（P95 268 ms），物品规模到十万级时需要两阶段召回 + ANN
+4. 只做了留一法协议，没有做多折交叉验证；好在这份数据上种子方差很小（AUC ±0.0005）
 5. 未做线上曝光数据验证，负样本与真实曝光分布仍有差距
 
 ---

@@ -94,9 +94,7 @@ def make_splits(
             probabilities = None
             if popularity_weights is not None:
                 probabilities = (
-                    popularity_weights.reindex(pool)
-                    .fillna(0.0)
-                    .to_numpy(dtype="float64")
+                    popularity_weights.reindex(pool).fillna(0.0).to_numpy(dtype="float64")
                 )
                 probabilities = probabilities / probabilities.sum()
             negatives = _sample_negatives(

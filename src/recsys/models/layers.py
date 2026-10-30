@@ -10,6 +10,8 @@ from torch import nn
 class FieldAwareEmbedding(nn.Module):
     """One embedding table for all fields, addressed through cumulative offsets."""
 
+    offsets: torch.Tensor
+
     def __init__(self, field_sizes: list[int], dim: int) -> None:
         super().__init__()
         offsets = np.concatenate([[0], np.cumsum(field_sizes)[:-1]]).astype(np.int64)
@@ -23,6 +25,8 @@ class FieldAwareEmbedding(nn.Module):
 
 
 class LinearPart(nn.Module):
+    offsets: torch.Tensor
+
     def __init__(self, field_sizes: list[int]) -> None:
         super().__init__()
         offsets = np.concatenate([[0], np.cumsum(field_sizes)[:-1]]).astype(np.int64)
