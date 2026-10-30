@@ -165,7 +165,7 @@ ctr-deepfm-pytorch/
 │   ├── serving/               # Recommender、Pydantic Schema、FastAPI
 │   ├── experiments.py         # 模型对比与消融
 │   └── cli.py                 # `ctr` 命令行
-├── tests/                     # 18 个单元/API 测试
+├── tests/                     # 21 个单元/API 测试
 ├── scripts/download_data.py   # 下载并解压 MovieLens
 ├── Dockerfile / Makefile / pyproject.toml
 ```
