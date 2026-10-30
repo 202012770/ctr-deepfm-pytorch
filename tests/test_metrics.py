@@ -31,3 +31,17 @@ def test_ranking_requires_positive() -> None:
         np.array([1, 1]), np.array([0, 0]), np.array([0.5, 0.4]), k_values=(10,)
     )
     assert metrics == {}
+
+
+def test_bootstrap_ci_ordering() -> None:
+    from recsys.experiments import bootstrap_ranking_ci
+
+    rng = np.random.default_rng(0)
+    users = np.repeat(np.arange(50), 5)
+    labels = (rng.random(len(users)) < 0.2).astype(int)
+    scores = rng.random(len(users))
+    result = bootstrap_ranking_ci(users, labels, scores, k=10, n_boot=100, seed=0)
+    low, high = result["hr@10_ci95"]
+    assert 0.0 <= low <= high <= 1.0
+    low_n, high_n = result["ndcg@10_ci95"]
+    assert 0.0 <= low_n <= high_n <= 1.0

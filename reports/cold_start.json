@@ -1,0 +1,27 @@
+{
+  "cold_user_fraction": 0.1,
+  "cold_users": 604,
+  "warm": {
+    "warm_auc": 0.9071,
+    "warm_logloss": 0.2119,
+    "warm_accuracy": 0.9053,
+    "warm_hr@10": 0.6855,
+    "warm_ndcg@10": 0.3972,
+    "warm_hr@20": 0.8499,
+    "warm_ndcg@20": 0.439
+  },
+  "cold": {
+    "cold_auc": 0.8317,
+    "cold_logloss": 0.2779,
+    "cold_accuracy": 0.8697,
+    "cold_hr@10": 0.4785,
+    "cold_ndcg@10": 0.2539,
+    "cold_hr@20": 0.6904,
+    "cold_ndcg@20": 0.3077
+  },
+  "delta": {
+    "warm_auc": -0.0754,
+    "warm_hr@10": -0.207,
+    "warm_ndcg@10": -0.1433
+  }
+}

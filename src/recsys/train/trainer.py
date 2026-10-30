@@ -34,6 +34,7 @@ class Trainer:
         seed: int = 42,
     ) -> None:
         torch.manual_seed(seed)
+        self.rng = np.random.default_rng(seed)
         torch.set_num_threads(
             int(os.environ.get("CTR_NUM_THREADS", max(1, (os.cpu_count() or 4) // 2)))
         )
@@ -52,7 +53,7 @@ class Trainer:
     def _batches(
         self, X: np.ndarray, y: np.ndarray, shuffle: bool
     ) -> Iterator[tuple[torch.Tensor, torch.Tensor]]:
-        indices = np.random.permutation(len(X)) if shuffle else np.arange(len(X))
+        indices = self.rng.permutation(len(X)) if shuffle else np.arange(len(X))
         for start in range(0, len(X), self.batch_size):
             batch = indices[start : start + self.batch_size]
             features = torch.from_numpy(np.asarray(X[batch], dtype=np.int64))

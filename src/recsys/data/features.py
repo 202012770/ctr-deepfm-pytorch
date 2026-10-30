@@ -11,9 +11,33 @@ import pandas as pd
 
 from recsys.data.loader import GENRE_COLUMNS
 
-USER_FIELDS: tuple[str, ...] = ("user_id", "gender", "age", "occupation", "zip_prefix")
-MOVIE_FIELDS: tuple[str, ...] = ("movie_id", "year_bucket")
+USER_FIELDS: tuple[str, ...] = (
+    "user_id",
+    "gender",
+    "age",
+    "occupation",
+    "zip_prefix",
+    "user_activity",
+    "user_avg_rating",
+    "user_top_genre",
+)
+MOVIE_FIELDS: tuple[str, ...] = (
+    "movie_id",
+    "year_bucket",
+    "item_popularity",
+    "item_avg_rating",
+)
 FIELD_NAMES: tuple[str, ...] = USER_FIELDS + MOVIE_FIELDS + GENRE_COLUMNS
+
+
+def _with_missing_fields(
+    table: pd.DataFrame, fields: tuple[str, ...], value: str = "unknown"
+) -> pd.DataFrame:
+    frame = table.copy()
+    for field in fields:
+        if field not in frame.columns:
+            frame[field] = value
+    return frame
 
 
 class FeatureEncoder:
@@ -25,6 +49,8 @@ class FeatureEncoder:
 
     def fit(self, users: pd.DataFrame, movies: pd.DataFrame) -> FeatureEncoder:
         self.vocab = {}
+        users = _with_missing_fields(users, USER_FIELDS)
+        movies = _with_missing_fields(movies, MOVIE_FIELDS)
         for field in USER_FIELDS:
             values = sorted(users[field].astype(str).unique())
             self.vocab[field] = {value: index + 1 for index, value in enumerate(values)}
@@ -45,6 +71,8 @@ class FeatureEncoder:
         users: pd.DataFrame,
         movies: pd.DataFrame,
     ) -> np.ndarray:
+        users = _with_missing_fields(users, USER_FIELDS)
+        movies = _with_missing_fields(movies, MOVIE_FIELDS)
         merged = (
             samples[["user_id", "movie_id"]]
             .merge(users, on="user_id", how="left")

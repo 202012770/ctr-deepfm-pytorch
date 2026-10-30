@@ -49,3 +49,35 @@ def test_negative_count_matches_ratio(toy_tables) -> None:
     negatives = int((split.train["label"] == 0).sum())
     assert negatives == positives * 2
     assert np.all(split.all_movies > 0)
+
+
+def test_popularity_negative_sampling(toy_tables) -> None:
+    ratings, _, _ = toy_tables
+    split = make_splits(
+        ratings,
+        min_rating=4,
+        train_negatives=1,
+        eval_negatives=3,
+        seed=3,
+        negative_sampling="popularity",
+    )
+    negatives = split.train[split.train["label"] == 0]
+    assert len(negatives) > 0
+    for row in negatives.itertuples():
+        assert row.movie_id not in split.user_history[row.user_id]
+    positives = int((split.train["label"] == 1).sum())
+    assert int((split.train["label"] == 0).sum()) == positives
+
+
+def test_enrich_features_adds_buckets(toy_tables) -> None:
+    from recsys.pipeline import enrich_user_movie_features
+
+    ratings, users, movies = toy_tables
+    split = make_splits(ratings, min_rating=4, train_negatives=1, eval_negatives=2, seed=0)
+    users_enriched, movies_enriched = enrich_user_movie_features(split, ratings, users, movies)
+    for column in ("user_activity", "user_avg_rating", "user_top_genre"):
+        assert column in users_enriched.columns
+        assert users_enriched[column].notna().all()
+    for column in ("item_popularity", "item_avg_rating"):
+        assert column in movies_enriched.columns
+        assert movies_enriched[column].notna().all()

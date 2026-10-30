@@ -73,6 +73,82 @@ def build_arrays(
     )
 
 
+def _bucket_counts(series: pd.Series) -> pd.Series:
+    if series.empty:
+        return series
+    buckets = pd.qcut(
+        series, q=min(10, series.nunique()), duplicates="drop", labels=False
+    )
+    return "c" + buckets.astype("Int64").astype(str)
+
+
+def _bucket_rating(series: pd.Series) -> pd.Series:
+    bins = [0.0, 3.5, 4.0, 4.25, 4.5, 4.75, 5.01]
+    labels = ["<=3.5", "3.5-4", "4-4.25", "4.25-4.5", "4.5-4.75", "4.75-5"]
+    return pd.cut(series, bins=bins, labels=labels, include_lowest=True).astype(str)
+
+
+def enrich_user_movie_features(
+    split: Split,
+    ratings: pd.DataFrame,
+    users: pd.DataFrame,
+    movies: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Aggregate user/item statistics from training positives only (no leakage).
+
+    Users and items without training interactions get the ``unknown`` bucket,
+    which is exactly what a cold-start request looks like at serving time.
+    """
+    train_pos = split.train.loc[split.train["label"] == 1, ["user_id", "movie_id"]]
+    train_ratings = train_pos.merge(
+        ratings[["user_id", "movie_id", "rating"]],
+        on=["user_id", "movie_id"],
+        how="left",
+    )
+
+    user_stats = train_ratings.groupby("user_id").agg(
+        activity=("rating", "size"), avg_rating=("rating", "mean")
+    )
+    item_stats = train_ratings.groupby("movie_id").agg(
+        popularity=("rating", "size"), avg_rating=("rating", "mean")
+    )
+
+    genre_rows = train_ratings.merge(
+        movies[["movie_id", "genres"]], on="movie_id", how="left"
+    )
+    genre_rows = genre_rows.assign(
+        genre=genre_rows["genres"].str.split("|")
+    ).explode("genre")
+    genre_counts = (
+        genre_rows.groupby(["user_id", "genre"]).size().rename("n").reset_index()
+    )
+    genre_counts["share"] = genre_counts["n"] / genre_counts.groupby("user_id")[
+        "n"
+    ].transform("sum")
+    top_genre = (
+        genre_counts.sort_values(["user_id", "share"], ascending=[True, False])
+        .drop_duplicates("user_id")
+        .set_index("user_id")["genre"]
+    )
+
+    users = users.copy()
+    movies = movies.copy()
+    users["user_activity"] = users["user_id"].map(_bucket_counts(user_stats["activity"]))
+    users["user_avg_rating"] = users["user_id"].map(_bucket_rating(user_stats["avg_rating"]))
+    users["user_top_genre"] = users["user_id"].map(top_genre)
+    movies["item_popularity"] = movies["movie_id"].map(
+        _bucket_counts(item_stats["popularity"])
+    )
+    movies["item_avg_rating"] = movies["movie_id"].map(
+        _bucket_rating(item_stats["avg_rating"])
+    )
+    for column in ("user_activity", "user_avg_rating", "user_top_genre"):
+        users[column] = users[column].fillna("unknown")
+    for column in ("item_popularity", "item_avg_rating"):
+        movies[column] = movies[column].fillna("unknown")
+    return users, movies
+
+
 def prepare_data(cfg: Config | None = None, *, force: bool = False) -> Prepared:
     cfg = cfg or load_config()
     processed = cfg.path("paths.processed_dir")
@@ -95,6 +171,7 @@ def prepare_data(cfg: Config | None = None, *, force: bool = False) -> Prepared:
         eval_negatives=int(cfg.data.eval_negatives),
         seed=int(cfg.data.seed),
     )
+    users, movies = enrich_user_movie_features(split, ratings, users, movies)
     encoder = FeatureEncoder().fit(users, movies)
     prepared = build_arrays(split, encoder, users, movies)
 
@@ -175,9 +252,11 @@ def run_experiment(
     hidden_dims: list[int] | None = None,
     dropout: float | None = None,
     epochs: int | None = None,
+    seed: int | None = None,
     verbose: bool = True,
 ) -> tuple[torch.nn.Module, Trainer, dict[str, Any]]:
     cfg = cfg or load_config()
+    torch.manual_seed(int(cfg.training.seed) if seed is None else int(seed))
     model = build_model(
         model_name,
         prepared.field_sizes,
@@ -192,7 +271,7 @@ def run_experiment(
         batch_size=int(cfg.training.batch_size),
         epochs=epochs or int(cfg.training.epochs),
         patience=int(cfg.training.patience),
-        seed=int(cfg.training.seed),
+        seed=int(cfg.training.seed) if seed is None else int(seed),
     )
     started = time.perf_counter()
     trainer.fit(prepared.X_train, prepared.y_train, prepared.X_val, prepared.y_val)
@@ -271,3 +350,79 @@ def load_bundle(cfg: Config | None = None) -> tuple[torch.nn.Module, dict[str, A
     model.load_state_dict(payload["state_dict"])
     model.eval()
     return model, payload, bundle
+
+
+@dataclass
+class ColdStartData:
+    warm: Prepared
+    X_cold: np.ndarray
+    y_cold: np.ndarray
+    cold_users: np.ndarray
+
+
+def prepare_cold_start(
+    cfg: Config | None = None, fraction: float = 0.1, seed: int = 42
+) -> ColdStartData:
+    """Hold out a fraction of users entirely and build their evaluation set.
+
+    The model never sees these users' interactions, but it does know their
+    profile (gender/age/occupation/zip); the user-id embedding stays untrained.
+    """
+    cfg = cfg or load_config()
+    ratings, users, movies = load_all(cfg.path("data.raw_dir"))
+    rng = np.random.default_rng(seed)
+    all_users = np.sort(users["user_id"].unique())
+    cold_users = rng.choice(
+        all_users, size=max(1, int(len(all_users) * fraction)), replace=False
+    )
+    cold_set = set(cold_users.tolist())
+    warm_ratings = ratings[~ratings["user_id"].isin(cold_set)]
+
+    warm_split = make_splits(
+        warm_ratings,
+        min_rating=int(cfg.data.min_rating),
+        train_negatives=int(cfg.data.train_negatives),
+        eval_negatives=int(cfg.data.eval_negatives),
+        seed=int(cfg.data.seed),
+    )
+    users_enriched, movies_enriched = enrich_user_movie_features(
+        warm_split, ratings, users, movies
+    )
+    encoder = FeatureEncoder().fit(users_enriched, movies_enriched)
+    warm = build_arrays(warm_split, encoder, users_enriched, movies_enriched)
+
+    positives = ratings[
+        ratings["user_id"].isin(cold_set)
+        & (ratings["rating"] >= int(cfg.data.min_rating))
+    ].sort_values(["user_id", "timestamp", "movie_id"])
+    held_out = positives.groupby("user_id").tail(1)
+    history = ratings.groupby("user_id")["movie_id"].apply(set).to_dict()
+    all_movies = np.sort(ratings["movie_id"].unique())
+
+    rows: list[tuple[int, int, int]] = []
+    for row in held_out.itertuples():
+        seen = history.get(row.user_id, set())
+        pool = np.fromiter(
+            (movie for movie in all_movies if movie not in seen),
+            dtype=np.int64,
+            count=len(all_movies) - len(seen & set(all_movies)),
+        )
+        rows.append((int(row.user_id), int(row.movie_id), 1))
+        negatives = rng.choice(
+            pool, size=int(cfg.data.eval_negatives), replace=False
+        )
+        rows.extend((int(row.user_id), int(movie), 0) for movie in negatives)
+
+    cold_frame = pd.DataFrame(rows, columns=["user_id", "movie_id", "label"])
+    X_cold = encoder.encode(cold_frame, users_enriched, movies_enriched)
+    logger.info(
+        "Cold start: %d users excluded, %d evaluation rows",
+        len(cold_users),
+        len(cold_frame),
+    )
+    return ColdStartData(
+        warm=warm,
+        X_cold=X_cold,
+        y_cold=cold_frame["label"].to_numpy(dtype="int8"),
+        cold_users=cold_frame["user_id"].to_numpy(dtype="int32"),
+    )

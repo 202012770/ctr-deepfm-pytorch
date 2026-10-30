@@ -66,6 +66,29 @@ def cmd_ablation(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_robustness(args: argparse.Namespace) -> int:
+    from recsys.experiments import run_robustness
+
+    table = run_robustness(epochs=args.epochs)
+    print(table[["seed", "test_auc", "test_hr@10", "test_ndcg@10"]].to_string(index=False))
+    return 0
+
+
+def cmd_negatives(args: argparse.Namespace) -> int:
+    from recsys.experiments import run_negative_comparison
+
+    table = run_negative_comparison(epochs=args.epochs)
+    print(table[["setting", "test_auc", "test_hr@10", "test_ndcg@10"]].to_string(index=False))
+    return 0
+
+
+def cmd_coldstart(args: argparse.Namespace) -> int:
+    from recsys.experiments import run_cold_start
+
+    run_cold_start(epochs=args.epochs)
+    return 0
+
+
 def cmd_serve(args: argparse.Namespace) -> int:
     import uvicorn
 
@@ -94,6 +117,18 @@ def build_parser() -> argparse.ArgumentParser:
     ablation = sub.add_parser("ablation", help="embedding dimension and negative-ratio ablations")
     ablation.add_argument("--epochs", type=int, default=None)
     ablation.set_defaults(func=cmd_ablation)
+
+    robustness = sub.add_parser("robustness", help="repeat runs over seeds with bootstrap CI")
+    robustness.add_argument("--epochs", type=int, default=10)
+    robustness.set_defaults(func=cmd_robustness)
+
+    negatives = sub.add_parser("negatives", help="uniform vs popularity negative sampling")
+    negatives.add_argument("--epochs", type=int, default=10)
+    negatives.set_defaults(func=cmd_negatives)
+
+    coldstart = sub.add_parser("coldstart", help="hold out users and evaluate cold start")
+    coldstart.add_argument("--epochs", type=int, default=10)
+    coldstart.set_defaults(func=cmd_coldstart)
 
     serve = sub.add_parser("serve", help="run the recommendation API")
     serve.add_argument("--host", default="0.0.0.0")
