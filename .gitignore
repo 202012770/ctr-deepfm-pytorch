@@ -22,3 +22,7 @@ models/rebuilds/
 data/predictions.db
 data/predictions.db-shm
 data/predictions.db-wal
+
+# personal career documents (local only)
+docs/interview_guide.md
+docs/resume_bullets.md
